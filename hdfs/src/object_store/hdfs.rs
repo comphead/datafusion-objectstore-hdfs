@@ -31,8 +31,8 @@ use hdfs::hdfs::{get_hdfs_by_full_path, FileStatus, HdfsErr, HdfsFile, HdfsFs};
 use hdfs::walkdir::HdfsWalkDir;
 use object_store::{
     path::{self, Path},
-    Error, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, PutOptions, PutResult, Result,
+    Error, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 use tokio::io::AsyncWrite;
 
@@ -114,51 +114,21 @@ impl Display for HadoopFileSystem {
 
 #[async_trait]
 impl ObjectStore for HadoopFileSystem {
-    // Current implementation is very simple due to missing configs,
-    // like whether able to overwrite, whether able to create parent directories, etc
-    async fn put(&self, location: &Path, bytes: Bytes) -> Result<PutResult> {
-        let hdfs = self.hdfs.clone();
-        let location = HadoopFileSystem::path_to_filesystem(location);
-
-        maybe_spawn_blocking(move || {
-            let file = match hdfs.create_with_overwrite(&location, true) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Err(to_error(e));
-                }
-            };
-
-            file.write(bytes.as_ref()).map_err(to_error)?;
-
-            file.close().map_err(to_error)?;
-
-            Ok(())
-        })
-        .await?;
-        return Ok(PutResult {
-            e_tag: None,
-            version: None,
-        });
-    }
-
     async fn put_opts(
         &self,
         _location: &Path,
-        _bytes: Bytes,
+        _bytes: PutPayload,
         _opts: PutOptions,
     ) -> Result<PutResult> {
         todo!()
     }
 
-    async fn put_multipart(
+    async fn put_multipart_opts(
         &self,
         _location: &Path,
-    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        todo!()
-    }
-
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
-        todo!()
+        _opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        unimplemented!()
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -182,7 +152,7 @@ impl ObjectStore for HadoopFileSystem {
 
             file.close().map_err(to_error)?;
 
-            let object_metadata = convert_metadata(file_status, &hdfs_root);
+            let object_metadata = convert_metadata(file_status.clone(), &hdfs_root);
 
             let range = Range {
                 start: 0,
@@ -199,6 +169,7 @@ impl ObjectStore for HadoopFileSystem {
             ),
             meta: object_metadata,
             range,
+            attributes: Default::default(),
         })
     }
 
@@ -223,13 +194,12 @@ impl ObjectStore for HadoopFileSystem {
                 check_modified(&options, &location, last_modified(&file_status))?;
             }
 
-            let range = if let Some(range) = options.range {
-                range
-            } else {
-                Range {
+            let range = match options.range {
+                Some(GetRange::Bounded(range)) => range,
+                _ => Range {
                     start: 0,
                     end: file_status.len(),
-                }
+                },
             };
 
             let buf = Self::read_range(&range, &file)?;
@@ -248,6 +218,7 @@ impl ObjectStore for HadoopFileSystem {
             ),
             meta: object_metadata,
             range,
+            attributes: Default::default(),
         })
     }
 

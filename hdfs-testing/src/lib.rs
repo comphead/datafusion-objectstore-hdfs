@@ -61,7 +61,7 @@ mod tests {
         run_hdfs_test("alltypes_plain.parquet".to_string(), |filename_hdfs| {
             Box::pin(async move {
                 let session_context =
-                    SessionContext::with_config(SessionConfig::new().with_batch_size(2));
+                    SessionContext::new_with_config(SessionConfig::new().with_batch_size(2));
                 let projection = None;
                 let exec =
                     get_hdfs_exec(&session_context, filename_hdfs.as_str(), &projection, None)
@@ -80,8 +80,16 @@ mod tests {
                 assert_eq!(tt_batches, 4 /* 8/2 */);
 
                 // test metadata
-                assert_eq!(exec.statistics().num_rows, Some(8));
-                assert_eq!(exec.statistics().total_byte_size, Some(671));
+                assert_eq!(*exec.statistics().unwrap().num_rows.get_value().unwrap(), 8);
+                assert_eq!(
+                    *exec
+                        .statistics()
+                        .unwrap()
+                        .total_byte_size
+                        .get_value()
+                        .unwrap(),
+                    671
+                );
 
                 Ok(())
             })
@@ -138,7 +146,9 @@ mod tests {
             object_meta: file_meta.clone(),
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let store = store as _;
@@ -164,7 +174,6 @@ mod tests {
                     limit,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
             )
